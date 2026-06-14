@@ -90,13 +90,52 @@ The app opens at **http://localhost:8501**.
 
 ## Docker
 
-A `Dockerfile` and `docker-compose.yml` are included. To run with Docker (requires Docker Desktop and Ollama running on the host):
+A `Dockerfile` and `docker-compose.yml` are included so you can run the app in a container instead of setting up Python locally.
 
+### Prerequisites
+
+1. **[Docker Desktop](https://www.docker.com/products/docker-desktop/)** installed and running
+2. **Ollama** installed and running **on the host machine** (not inside the container)
+3. The model you want to use already pulled on the host: `ollama pull tinyllama`
+
+### Build and run
+
+From the project root:
 ```bash
 docker compose up --build
 ```
 
-The container connects to Ollama on the host via `host.docker.internal:11434`.
+First build takes 5–10 minutes (downloading PyTorch, Tesseract, etc.). Subsequent runs are instant.
+
+Open **http://localhost:8501** in your browser.
+
+To stop:
+```bash
+docker compose down
+```
+
+### How it connects to Ollama
+
+The container reaches Ollama on the host via `host.docker.internal:11434`. The app automatically switches to this URL when it detects it's running inside Docker (via the `IS_DOCKER` env variable).
+
+### GPU support (optional)
+
+If you have an NVIDIA GPU and want CUDA acceleration:
+
+1. Install the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) on the host
+2. Uncomment the `deploy:` block in `docker-compose.yml`
+3. Swap the CPU torch lines in `requirements.txt` for CUDA versions:
+   ```
+   --extra-index-url https://download.pytorch.org/whl/cu124
+   torch==2.6.0+cu124
+   torchvision==0.21.0+cu124
+   torchaudio==2.6.0+cu124
+   ```
+4. Rebuild: `docker compose up --build`
+
+### Editing code without rebuilding
+
+The `volumes` mount in `docker-compose.yml` syncs your local folder into the container. Edits to `app.py` are reflected immediately — Streamlit will auto-reload. You only need to rebuild when `requirements.txt` or the `Dockerfile` itself changes.
 
 ## Notes
 

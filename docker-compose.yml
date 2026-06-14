@@ -1,26 +1,25 @@
-version: '3.8'
-
 services:
   chat-app:
     build: .
-    container_name: pdf_chat_gpu
+    container_name: docquery
     ports:
       - "8501:8501"
     volumes:
-      - .:/app            # Syncs your folder to the container (Live Coding)
-      - /app/db           # Prevents DB from being overwritten by sync
+      - .:/app        # Live code sync
+      - /app/db       # Keep ChromaDB persistent inside the container
     environment:
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-    # 👇 This allows the container to talk to Ollama on your Windows Host
+      - IS_DOCKER=true
+    # Allows the container to reach Ollama running on the host machine
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    
-    # 👇 GPU Reservation
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+
+    # 👇 Uncomment the block below if you have an NVIDIA GPU and want CUDA acceleration.
+    # Requires NVIDIA Container Toolkit installed on the host.
+    #
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
