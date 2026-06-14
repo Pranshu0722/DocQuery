@@ -115,12 +115,14 @@ def build_qa_chain(db):
 
     memory = ConversationBufferMemory(
         memory_key="chat_history",
-        return_messages=True
+        return_messages=True,
+        output_key="answer"
     )
     qa = ConversationalRetrievalChain.from_llm(
         llm=llm,
         retriever=db.as_retriever(),
-        memory=memory
+        memory=memory,
+        return_source_documents=True
     )
     return qa
 
@@ -162,9 +164,16 @@ if st.session_state.qa:
         st.session_state.qa.memory.clear()
         st.rerun()
 
-    for role, msg in st.session_state.history:
+    for entry in st.session_state.history:
+        role, msg = entry[0], entry[1]
+        sources = entry[2] if len(entry) > 2 else None
         with st.chat_message(role):
             st.markdown(msg)
+            if sources:
+                with st.expander(f"Sources ({len(sources)})"):
+                    for i, doc in enumerate(sources, 1):
+                        st.markdown(f"**Chunk {i}**")
+                        st.text(doc.page_content)
 
     if user_q := st.chat_input("Ask a question..."):
         st.session_state.history.append(("user", user_q))
@@ -174,7 +183,13 @@ if st.session_state.qa:
         with st.spinner("Thinking..."):
             result = st.session_state.qa.invoke({"question": user_q})
             answer = result["answer"]
+            sources = result.get("source_documents", [])
 
-        st.session_state.history.append(("assistant", answer))
+        st.session_state.history.append(("assistant", answer, sources))
         with st.chat_message("assistant"):
             st.markdown(answer)
+            if sources:
+                with st.expander(f"Sources ({len(sources)})"):
+                    for i, doc in enumerate(sources, 1):
+                        st.markdown(f"**Chunk {i}**")
+                        st.text(doc.page_content)
