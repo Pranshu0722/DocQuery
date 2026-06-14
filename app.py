@@ -1,5 +1,6 @@
 import os
 import uuid
+import requests
 import streamlit as st
 import torch
 from dotenv import load_dotenv
@@ -48,7 +49,65 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 st.set_page_config(page_title="Chat With File", layout="wide")
 st.sidebar.title("Configuration")
 st.sidebar.write(f"Processing on: **{DEVICE.upper()}**")
-st.sidebar.write(f"LLM: **{OLLAMA_MODEL}**")
+
+def _format_size(num_bytes):
+    if not num_bytes:
+        return ""
+    gb = num_bytes / (1024 ** 3)
+    if gb >= 1:
+        return f"{gb:.1f} GB"
+    mb = num_bytes / (1024 ** 2)
+    return f"{mb:.0f} MB"
+
+def _pretty_name(raw_name):
+    # Strip ":latest" since it's the default and adds noise
+    name = raw_name.replace(":latest", "")
+    # Title-case the model family (everything before ":")
+    if ":" in name:
+        family, tag = name.split(":", 1)
+        return f"{family.title()} ({tag})"
+    return name.title()
+
+def list_ollama_models():
+    try:
+        resp = requests.get(f"{OLLAMA_URL}/api/tags", timeout=3)
+        resp.raise_for_status()
+        return resp.json().get("models", [])
+    except Exception:
+        return []
+
+available_models = list_ollama_models()
+
+if available_models:
+    # Map pretty label -> raw model id
+    label_to_id = {
+        f"{_pretty_name(m['name'])} — {_format_size(m.get('size'))}".rstrip(" —"): m["name"]
+        for m in available_models
+    }
+    labels = list(label_to_id.keys())
+
+    # Pick a default label that matches OLLAMA_MODEL if present
+    default_idx = 0
+    for i, lbl in enumerate(labels):
+        if label_to_id[lbl] == OLLAMA_MODEL:
+            default_idx = i
+            break
+
+    selected_label = st.sidebar.selectbox("LLM Model", labels, index=default_idx)
+    selected_model = label_to_id[selected_label]
+else:
+    st.sidebar.warning("Could not reach Ollama. Is it running?")
+    selected_model = OLLAMA_MODEL
+    st.sidebar.write(f"LLM: **{selected_model}** (fallback)")
+
+if "active_model" not in st.session_state:
+    st.session_state.active_model = selected_model
+
+if selected_model != st.session_state.active_model:
+    st.session_state.active_model = selected_model
+    if st.session_state.get("qa") is not None and st.session_state.get("db") is not None:
+        st.session_state.qa = None  # rebuilt below from cached db
+        st.rerun()
 
 # -----------------------------------------------------------
 # HELPERS
@@ -110,8 +169,8 @@ def create_vector_db(chunks):
     )
     return db
 
-def build_qa_chain(db):
-    llm = OllamaLLM(model=OLLAMA_MODEL, temperature=0.3, base_url=OLLAMA_URL)
+def build_qa_chain(db, model_name):
+    llm = OllamaLLM(model=model_name, temperature=0.3, base_url=OLLAMA_URL)
 
     memory = ConversationBufferMemory(
         memory_key="chat_history",
@@ -135,8 +194,14 @@ st.markdown("Upload a PDF, DOCX, TXT, or image and chat with it locally.")
 
 if "qa" not in st.session_state:
     st.session_state.qa = None
+if "db" not in st.session_state:
+    st.session_state.db = None
 if "history" not in st.session_state:
     st.session_state.history = []
+
+# Rebuild the chain if the model changed but we still have a vector DB
+if st.session_state.qa is None and st.session_state.db is not None:
+    st.session_state.qa = build_qa_chain(st.session_state.db, selected_model)
 
 uploaded_file = st.file_uploader(
     "Upload Document or Image",
@@ -151,7 +216,8 @@ if uploaded_file and st.session_state.qa is None:
             chunks = split_into_chunks(text)
             if chunks:
                 db = create_vector_db(chunks)
-                st.session_state.qa = build_qa_chain(db)
+                st.session_state.db = db
+                st.session_state.qa = build_qa_chain(db, selected_model)
                 st.success(f"Loaded {len(chunks)} chunks! Ready to chat.")
             else:
                 st.error("File is empty or could not be read.")
