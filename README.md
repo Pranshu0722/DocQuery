@@ -64,13 +64,19 @@ ollama pull mistral     # ~4 GB, best quality (needs ~5 GB free RAM)
 ollama pull phi3:mini   # ~2.3 GB, good balance
 ```
 
-Make sure the model name in `app.py` (`build_qa_chain`) matches the one you pulled.
-
-### 4. (Optional) Configure Tesseract path
-If you want image OCR support, install Tesseract and update the path in `app.py`:
-```python
-pytesseract.pytesseract.tesseract_cmd = r'<your-tesseract-path>\tesseract.exe'
+### 4. (Optional) Configure environment
+Copy `.env.example` to `.env` and adjust:
+```bash
+cp .env.example .env
 ```
+
+Available variables:
+
+| Variable | Default | Description |
+|---|---|---|
+| `OLLAMA_MODEL` | `tinyllama` | Which Ollama model to use |
+| `OLLAMA_URL` | `http://localhost:11434` | Where Ollama is running |
+| `TESSERACT_PATH` | (auto) | Path to Tesseract binary (Windows only, if not on PATH) |
 
 ## Run
 
