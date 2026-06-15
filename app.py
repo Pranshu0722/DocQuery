@@ -153,20 +153,28 @@ def split_into_chunks(text):
     )
     return splitter.split_text(text)
 
-def create_vector_db(chunks):
-    embeddings = HuggingFaceEmbeddings(
+def get_embeddings():
+    return HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-MiniLM-L6-v2",
         model_kwargs={"device": DEVICE}
     )
 
+def create_vector_db(chunks, source_name):
     unique_db_path = os.path.join(DB_BASE_PATH, f"session_{uuid.uuid4()}")
     os.makedirs(unique_db_path, exist_ok=True)
 
+    metadatas = [{"source": source_name} for _ in chunks]
     db = Chroma.from_texts(
         texts=chunks,
-        embedding=embeddings,
+        embedding=get_embeddings(),
+        metadatas=metadatas,
         persist_directory=unique_db_path
     )
+    return db
+
+def add_to_vector_db(db, chunks, source_name):
+    metadatas = [{"source": source_name} for _ in chunks]
+    db.add_texts(texts=chunks, metadatas=metadatas)
     return db
 
 def build_qa_chain(db, model_name):
@@ -198,36 +206,68 @@ if "db" not in st.session_state:
     st.session_state.db = None
 if "history" not in st.session_state:
     st.session_state.history = []
+if "processed_files" not in st.session_state:
+    st.session_state.processed_files = set()
+if "uploader_key" not in st.session_state:
+    st.session_state.uploader_key = 0
 
 # Rebuild the chain if the model changed but we still have a vector DB
 if st.session_state.qa is None and st.session_state.db is not None:
     st.session_state.qa = build_qa_chain(st.session_state.db, selected_model)
 
-uploaded_file = st.file_uploader(
-    "Upload Document or Image",
-    type=["txt", "pdf", "docx", "png", "jpg", "jpeg"]
+uploaded_files = st.file_uploader(
+    "Upload Documents or Images",
+    type=["txt", "pdf", "docx", "png", "jpg", "jpeg"],
+    accept_multiple_files=True,
+    key=f"uploader_{st.session_state.uploader_key}"
 )
 
-if uploaded_file and st.session_state.qa is None:
-    with st.spinner(f"Processing on {DEVICE}..."):
-        text = load_text_from_file(uploaded_file)
+if uploaded_files:
+    new_files = [f for f in uploaded_files if f.name not in st.session_state.processed_files]
+    if new_files:
+        with st.spinner(f"Processing {len(new_files)} file(s) on {DEVICE}..."):
+            total_chunks = 0
+            for file in new_files:
+                text = load_text_from_file(file)
+                if not text:
+                    st.error(f"Could not extract text from {file.name}.")
+                    continue
 
-        if text:
-            chunks = split_into_chunks(text)
-            if chunks:
-                db = create_vector_db(chunks)
-                st.session_state.db = db
-                st.session_state.qa = build_qa_chain(db, selected_model)
-                st.success(f"Loaded {len(chunks)} chunks! Ready to chat.")
-            else:
-                st.error("File is empty or could not be read.")
-        else:
-            st.error("Could not extract text. If this is an image, make sure Tesseract is installed.")
+                chunks = split_into_chunks(text)
+                if not chunks:
+                    st.warning(f"{file.name} is empty.")
+                    continue
+
+                if st.session_state.db is None:
+                    st.session_state.db = create_vector_db(chunks, file.name)
+                else:
+                    add_to_vector_db(st.session_state.db, chunks, file.name)
+
+                st.session_state.processed_files.add(file.name)
+                total_chunks += len(chunks)
+
+            if total_chunks > 0:
+                st.session_state.qa = build_qa_chain(st.session_state.db, selected_model)
+                st.success(f"Loaded {total_chunks} chunks from {len(new_files)} file(s).")
+
+# Sidebar: show loaded files
+if st.session_state.processed_files:
+    st.sidebar.markdown("### Loaded files")
+    for name in sorted(st.session_state.processed_files):
+        st.sidebar.markdown(f"- {name}")
 
 if st.session_state.qa:
     if st.sidebar.button("Clear Conversation"):
         st.session_state.history = []
         st.session_state.qa.memory.clear()
+        st.rerun()
+
+    if st.sidebar.button("Reset Everything"):
+        st.session_state.qa = None
+        st.session_state.db = None
+        st.session_state.history = []
+        st.session_state.processed_files = set()
+        st.session_state.uploader_key += 1
         st.rerun()
 
     for entry in st.session_state.history:
@@ -238,7 +278,8 @@ if st.session_state.qa:
             if sources:
                 with st.expander(f"Sources ({len(sources)})"):
                     for i, doc in enumerate(sources, 1):
-                        st.markdown(f"**Chunk {i}**")
+                        src = doc.metadata.get("source", "unknown")
+                        st.markdown(f"**Chunk {i}** — `{src}`")
                         st.text(doc.page_content)
 
     if user_q := st.chat_input("Ask a question..."):
@@ -257,5 +298,6 @@ if st.session_state.qa:
             if sources:
                 with st.expander(f"Sources ({len(sources)})"):
                     for i, doc in enumerate(sources, 1):
-                        st.markdown(f"**Chunk {i}**")
+                        src = doc.metadata.get("source", "unknown")
+                        st.markdown(f"**Chunk {i}** — `{src}`")
                         st.text(doc.page_content)
